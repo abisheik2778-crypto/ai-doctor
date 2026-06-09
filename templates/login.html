@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+
+    <title>AI Doctor Login</title>
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <link rel="stylesheet" href="/static/style.css">
+
+</head>
+
+<body class="auth-body">
+
+<div class="auth-wrapper">
+
+    <div class="auth-brand">
+
+        <h1>⚡ AI Doctor</h1>
+
+        <h2>Cyber Healthcare System</h2>
+
+        <p>
+            Login to access AI consultation,
+            report analyzer, appointments,
+            BMI tracking and health dashboard.
+        </p>
+
+    </div>
+
+    <div class="auth-box">
+
+        <h2>Welcome Back</h2>
+
+        <p>
+            Login to your AI Doctor account
+        </p>
+
+        <form method="POST">
+
+            <input type="email"
+                   name="email"
+                   placeholder="Email Address"
+                   required>
+
+            <input type="password"
+                   name="password"
+                   placeholder="Password"
+                   required>
+
+            <button type="submit">
+                Login
+            </button>
+
+        </form>
+
+        <p class="error">
+            {{ error }}
+        </p>
+
+        <p>
+            New user?
+            <a href="/register">
+                Create Account
+            </a>
+        </p>
+
+        <p>
+            <a href="/">
+                Back to Home
+            </a>
+        </p>
+
+    </div>
+
+</div>
+
+</body>
+</html>
