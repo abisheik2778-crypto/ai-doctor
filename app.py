@@ -6,7 +6,7 @@ from werkzeug.utils import secure_filename
 from google import genai
 
 app = Flask(__name__)
-app.secret_key = "ai_doctor_secret_key"
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "change-this-secret-before-production")
 
 UPLOAD_FOLDER = "static/uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -14,49 +14,16 @@ app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 
 # Render deploy ku environment variable use pannunga.
 # Local test ku terminal la GEMINI_API_KEY set pannunga OR direct key paste pannunga.
-client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY", "AQ.Ab8RN6KUN07ahPrDPVNpCItmcivX62WygBU2dEBbwnbWhd5SFw"))
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 COMMON_AI_RULES = """
-Give answer in SIMPLE ENGLISH.
-
-Use this format:
-
-AI HEALTH RESPONSE
-
-Possible Disease:
-• disease 1
-• disease 2
-
-Suggested Medicine Category:
-• Mild fever → Paracetamol type medicine may help
-• Cold / sneezing → Antihistamine type medicine may help
-• Cough → Cough syrup type medicine may help
-• Acidity → Antacid type medicine may help
-• Loose motion → ORS and hydration may help
-
-Home Care:
-• care 1
-• care 2
-
-Recommended Tests:
-• test 1
-• test 2
-
-Warning Signs:
-• warning 1
-• warning 2
-
-Doctor Advice:
-• Consult a real doctor before taking medicine.
-• This AI gives educational guidance only.
-
-Rules:
-• Keep answer short
-• Keep answer line by line
-• Use bullet points
-• No markdown
-• No stars
-• No exact dosage
+Give simple, clear educational health information in plain English.
+Do not diagnose with certainty or prescribe medicines or dosages.
+Explain general self-care, warning signs, and when to contact a qualified clinician.
+For severe or sudden symptoms, advise urgent medical care.
+Mention that this information is not a substitute for a medical professional.
+Keep the answer concise and use headings and bullet points.
 """
 
 def db():
@@ -113,13 +80,15 @@ def init_db():
 init_db()
 
 def ask_ai(prompt):
+    if client is None:
+        return "AI service is not configured. Please add GEMINI_API_KEY in your Render environment variables."
     try:
         response = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt
         )
 
-        text = response.text
+        text = response.text or "The AI could not generate a response. Please try again."
 
         text = text.replace("Possible Disease:", "\nPossible Disease:")
         text = text.replace("Suggested Medicine Category:", "\nSuggested Medicine Category:")
@@ -227,18 +196,56 @@ def chat():
     if not logged_in():
         return redirect("/login")
 
-    user_msg = request.form["message"]
+    user_msg = (request.form.get("quick_question") or request.form.get("message") or "").strip()
+    if not user_msg:
+        return redirect("/ai-chat")
 
-    prompt = f"""
-You are an AI Doctor Assistant.
-
-User Symptoms:
+    # Five quick questions use safe, predefined educational responses.
+    normalized = user_msg.lower()
+    if "fever" in normalized:
+        ai_reply = ("GENERAL FEVER GUIDANCE\n"
+                    "• Rest and drink fluids.\n"
+                    "• If possible, check and record your temperature.\n"
+                    "• Seek medical advice if fever is persistent, worsening, or affects a young child or a person with a serious condition.\n"
+                    "• Get urgent help for difficulty breathing, confusion, stiff neck, seizures, or severe weakness.\n"
+                    "• This is general information, not a diagnosis or prescription.")
+    elif "headache" in normalized or "migraine" in normalized:
+        ai_reply = ("GENERAL HEADACHE GUIDANCE\n"
+                    "• Rest in a quiet place and drink water.\n"
+                    "• Take a break from screens and note possible triggers.\n"
+                    "• Contact a clinician if headaches keep returning or are getting worse.\n"
+                    "• Seek emergency care for a sudden, extremely severe headache or headache with weakness, fainting, confusion, fever with stiff neck, or vision/speech changes.\n"
+                    "• This is general information, not a diagnosis or prescription.")
+    elif "cold" in normalized or "cough" in normalized or "sneez" in normalized:
+        ai_reply = ("GENERAL COLD / COUGH GUIDANCE\n"
+                    "• Rest, drink fluids, and consider warm drinks to soothe the throat.\n"
+                    "• Avoid smoke and other irritants.\n"
+                    "• Seek medical advice if symptoms worsen, last longer than expected, or you have a high/persistent fever.\n"
+                    "• Get urgent help for difficulty breathing, chest pain, blue lips, or confusion.\n"
+                    "• Ask a clinician or pharmacist before using medicines, especially for children or if you have other conditions.")
+    elif "diabetes" in normalized or "blood sugar" in normalized:
+        ai_reply = ("GENERAL DIABETES CARE TIPS\n"
+                    "• Follow the care plan and medicines prescribed by your clinician.\n"
+                    "• Monitor blood glucose as advised and keep a record.\n"
+                    "• Eat regular balanced meals, stay active as appropriate, and attend follow-up visits.\n"
+                    "• Do not stop or change diabetes medicine without medical advice.\n"
+                    "• Seek urgent help for severe confusion, fainting, or other severe symptoms.")
+    elif "blood pressure" in normalized or "hypertension" in normalized:
+        ai_reply = ("GENERAL BLOOD PRESSURE GUIDANCE\n"
+                    "• Measure blood pressure using the correct technique and record results.\n"
+                    "• Follow your clinician's advice about food, activity, and prescribed medicine.\n"
+                    "• Do not stop or change prescribed medicine on your own.\n"
+                    "• If a very high reading occurs with chest pain, breathlessness, weakness, confusion, or severe headache, seek emergency care.\n"
+                    "• A clinician should interpret repeated high readings.")
+    else:
+        prompt = f"""
+You are an educational AI health assistant. Do not claim to diagnose or prescribe medicines.
+User question or symptoms:
 {user_msg}
 
 {COMMON_AI_RULES}
 """
-
-    ai_reply = ask_ai(prompt)
+        ai_reply = ask_ai(prompt)
 
     conn = db()
     cur = conn.cursor()
@@ -278,14 +285,31 @@ def report():
 
             file.save(filepath)
 
-            summary = ask_ai(f"""
-You are an AI Medical Report Analyzer.
+            extension = os.path.splitext(filename)[1].lower()
+            report_text = ""
+            try:
+                if extension in (".txt", ".csv"):
+                    report_text = open(filepath, "r", encoding="utf-8", errors="ignore").read()[:20000]
+                elif extension == ".pdf":
+                    from pypdf import PdfReader
+                    reader = PdfReader(filepath)
+                    report_text = "\n".join((page.extract_text() or "") for page in reader.pages)[:20000]
+                else:
+                    report_text = "This file type is saved, but automatic text extraction is not supported. Please upload a text-based PDF, TXT, or CSV report."
+            except Exception:
+                report_text = "The file was uploaded, but its text could not be extracted. Please try a text-based PDF, TXT, or CSV file."
 
-Medical Report:
-{filename}
+            if report_text.strip() and not report_text.startswith("This file type") and not report_text.startswith("The file was uploaded"):
+                summary = ask_ai(f"""
+You are an educational medical report explainer. Summarize only what is present in the extracted report text. Do not diagnose or prescribe medicine. Explain that reference ranges depend on the lab and patient context. Highlight any result that appears marked high/low in the report, suggest questions to ask a clinician, and advise urgent care for severe symptoms.
+
+Extracted medical report text:
+{report_text}
 
 {COMMON_AI_RULES}
 """)
+            else:
+                summary = report_text or "No readable text was found in this file. Please upload a text-based PDF, TXT, or CSV report."
 
             conn = db()
             cur = conn.cursor()
@@ -468,14 +492,15 @@ def prescription():
         symptom = request.form["symptom"]
 
         prompt = f"""
-You are an AI Prescription Assistant.
+You are an educational symptom-summary assistant, not a prescribing clinician.
+Do not generate a prescription, recommend specific medicines, or provide dosages.
+Create a concise summary of the symptoms, general non-drug self-care, warning signs, and questions the user can discuss with a licensed clinician.
 
-User Symptoms:
+User symptoms:
 {symptom}
 
 {COMMON_AI_RULES}
 """
-
         output = ask_ai(prompt)
 
     return render_template(
@@ -517,17 +542,15 @@ def doctor_panel():
         reports=reports
     )
 
-@app.route("/clear-history")
+@app.route("/clear-history", methods=["GET", "POST"])
 def clear_history():
-
-    conn = sqlite3.connect("database.db")
+    if not logged_in():
+        return redirect("/login")
+    conn = db()
     cur = conn.cursor()
-
-    cur.execute("DELETE FROM chat_history")
-
+    cur.execute("DELETE FROM chat_history WHERE user_email=?", (session["email"],))
     conn.commit()
     conn.close()
-
     return redirect("/ai-chat")
 
 @app.route("/logout")
